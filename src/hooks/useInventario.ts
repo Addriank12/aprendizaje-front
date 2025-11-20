@@ -9,6 +9,13 @@ interface StockPrediction {
   product_id: number;
   stock_estimado: number;
   target_date: string;
+  product_info?: {
+    id: number;
+    codigo?: string;
+    item?: string;
+    current_stock: number;
+  };
+  analysis?: string | null;
 }
 
 interface RetrainData {

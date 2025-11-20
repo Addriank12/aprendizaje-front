@@ -6,7 +6,8 @@ const app = express();
 const PORT = 3000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "50mb" })); // Aumentar límite de payload
+app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // Obtener inventario paginado
 app.get("/api/inventario", async (req, res) => {
@@ -85,6 +86,17 @@ app.post("/api/predict", async (req, res) => {
       });
     }
 
+    // Obtener datos del producto
+    const product = await InventarioAccess.getById(product_id);
+
+    if (!product) {
+      return res.status(404).json({
+        error: "Producto no encontrado",
+        message: `No se encontró el producto con ID ${product_id}`,
+      });
+    }
+
+    // Obtener predicción
     const response = await fetch(
       "https://stock-retrain-service-18474533500.us-central1.run.app/api/v1/predict",
       {
@@ -104,7 +116,69 @@ app.post("/api/predict", async (req, res) => {
     }
 
     const prediction = await response.json();
-    res.json(prediction);
+
+    // Obtener análisis del chat
+    let analysis = null;
+    try {
+      const pregunta = `Actúa como experto en logística. Revisa el producto ${product_id} (${
+        product.item
+      }, código: ${product.codigo}). Stock actual: ${
+        product.cantidad || 0
+      } unidades. ¿Cuál es la predicción para el ${new Date(
+        date
+      ).toLocaleDateString("es-ES", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      })}? El stock estimado es ${prediction.stock_estimado.toFixed(
+        2
+      )} unidades (predicción de salida: ${
+        prediction.prediccion_salida
+      }, días adelante: ${
+        prediction.days_ahead
+      }). Si el stock estimado es bajo, dame una recomendación.`;
+
+      const chatResponse = await fetch(
+        "https://stock-retrain-service-18474533500.us-central1.run.app/api/v1/chat",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            pregunta,
+          }),
+        }
+      );
+
+      if (chatResponse.ok) {
+        const chatResult = await chatResponse.json();
+        analysis =
+          chatResult.respuesta ||
+          chatResult.analysis ||
+          chatResult.message ||
+          chatResult;
+        console.log("Respuesta del chat recibida:", analysis);
+      } else {
+        console.warn(`Chat API respondió con status ${chatResponse.status}`);
+      }
+    } catch (chatError) {
+      console.error("Error al obtener análisis del chat:", chatError);
+      // No fallar si el chat no está disponible
+    }
+
+    console.log("Análisis final:", analysis);
+
+    res.json({
+      ...prediction,
+      product_info: {
+        id: product.Id,
+        codigo: product.codigo,
+        item: product.item,
+        current_stock: product.cantidad || 0,
+      },
+      analysis,
+    });
   } catch (error) {
     console.error("Error al obtener predicción:", error);
     res.status(500).json({
@@ -149,22 +223,101 @@ app.post("/api/retrain", async (req, res) => {
       }
     }
 
-    const response = await fetch("http://localhost:1919/api/v1/retrain", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ data }),
+    // Función para enviar un lote de datos con manejo de error 413
+    const sendBatch = async (batch: any[], batchSize: number): Promise<any> => {
+      try {
+        const response = await fetch(
+          "https://stock-retrain-service-18474533500.us-central1.run.app/api/v1/retrain",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ data: batch }),
+          }
+        );
+
+        // Si obtenemos error 413 (Payload Too Large), dividir el lote
+        if (response.status === 413) {
+          if (batch.length === 1) {
+            throw new Error(
+              "Un solo registro es demasiado grande para procesar"
+            );
+          }
+
+          console.log(
+            `Error 413: Dividiendo lote de ${batch.length} registros en lotes más pequeños`
+          );
+
+          // Dividir en dos mitades
+          const halfSize = Math.floor(batch.length / 2);
+          const firstHalf = batch.slice(0, halfSize);
+          const secondHalf = batch.slice(halfSize);
+
+          // Procesar cada mitad recursivamente
+          const [result1, result2] = await Promise.all([
+            sendBatch(firstHalf, halfSize),
+            sendBatch(secondHalf, batch.length - halfSize),
+          ]);
+
+          return {
+            message: "Reentrenamiento completado en múltiples lotes",
+            batches_processed:
+              (result1.batches_processed || 1) +
+              (result2.batches_processed || 1),
+            total_records: batch.length,
+          };
+        }
+
+        if (!response.ok) {
+          throw new Error(
+            `Error en la API de reentrenamiento: ${response.status} ${response.statusText}`
+          );
+        }
+
+        const result = await response.json();
+        return result;
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("413")) {
+          // Si el error 413 viene del fetch mismo, dividir
+          if (batch.length === 1) {
+            throw new Error(
+              "Un solo registro es demasiado grande para procesar"
+            );
+          }
+
+          console.log(
+            `Error de tamaño: Dividiendo lote de ${batch.length} registros`
+          );
+
+          const halfSize = Math.floor(batch.length / 2);
+          const firstHalf = batch.slice(0, halfSize);
+          const secondHalf = batch.slice(halfSize);
+
+          const [result1, result2] = await Promise.all([
+            sendBatch(firstHalf, halfSize),
+            sendBatch(secondHalf, batch.length - halfSize),
+          ]);
+
+          return {
+            message: "Reentrenamiento completado en múltiples lotes",
+            batches_processed:
+              (result1.batches_processed || 1) +
+              (result2.batches_processed || 1),
+            total_records: batch.length,
+          };
+        }
+        throw error;
+      }
+    };
+
+    // Intentar enviar todos los datos
+    const result = await sendBatch(data, data.length);
+
+    res.json({
+      ...result,
+      total_records_sent: data.length,
     });
-
-    if (!response.ok) {
-      throw new Error(
-        `Error en la API de reentrenamiento: ${response.statusText}`
-      );
-    }
-
-    const result = await response.json();
-    res.json(result);
   } catch (error) {
     console.error("Error al reentrenar modelo:", error);
     res.status(500).json({

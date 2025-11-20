@@ -6,6 +6,13 @@ interface PredictionResult {
   stock_estimado: number;
   target_date: string;
   days_ahead: number;
+  product_info?: {
+    id: number;
+    codigo?: string;
+    item?: string;
+    current_stock: number;
+  };
+  analysis?: string | null;
 }
 
 interface RestockItem {
@@ -74,7 +81,9 @@ export const Productos = () => {
   const [showRestockModal, setShowRestockModal] = useState(false);
   const [restockDate, setRestockDate] = useState("");
   const [restockThreshold, setRestockThreshold] = useState(10);
-  const [restockResult, setRestockResult] = useState<RestockResponse | null>(null);
+  const [restockResult, setRestockResult] = useState<RestockResponse | null>(
+    null
+  );
   const [restockPage, setRestockPage] = useState(1);
   const [restockLimit] = useState(50);
 
@@ -108,12 +117,16 @@ export const Productos = () => {
     if (!selectedProductId || !predictionDate) return;
 
     const result = await predictStock(selectedProductId, predictionDate);
+    console.log("Resultado de predicción recibido:", result);
     if (result) {
+      console.log("Analysis en resultado:", result.analysis);
       setPredictionResult({
         productId: result.product_id,
         stock_estimado: result.stock_estimado,
         target_date: result.target_date,
         days_ahead: result.days_ahead,
+        product_info: result.product_info,
+        analysis: result.analysis,
       });
     }
   };
@@ -204,7 +217,12 @@ export const Productos = () => {
   const handleCheckRestock = async () => {
     if (!restockDate) return;
 
-    const result = await checkRestock(restockDate, restockThreshold, restockPage, restockLimit);
+    const result = await checkRestock(
+      restockDate,
+      restockThreshold,
+      restockPage,
+      restockLimit
+    );
     if (result) {
       setRestockResult(result);
     }
@@ -212,9 +230,14 @@ export const Productos = () => {
 
   const handleRestockPageChange = async (newPage: number) => {
     if (!restockDate) return;
-    
+
     setRestockPage(newPage);
-    const result = await checkRestock(restockDate, restockThreshold, newPage, restockLimit);
+    const result = await checkRestock(
+      restockDate,
+      restockThreshold,
+      newPage,
+      restockLimit
+    );
     if (result) {
       setRestockResult(result);
     }
@@ -294,6 +317,9 @@ export const Productos = () => {
           <thead className="bg-gray-800 text-white">
             <tr>
               <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider">
+                ID
+              </th>
+              <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider">
                 Código
               </th>
 
@@ -331,6 +357,9 @@ export const Productos = () => {
                   key={item.Id}
                   className="hover:bg-gray-50 transition-colors"
                 >
+                  <td className="px-6 py-4 whitespace-nowrap text-sm">
+                    {item.Id || "-"}
+                  </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm">
                     {item.codigo || "-"}
                   </td>
@@ -492,6 +521,26 @@ export const Productos = () => {
                   Resultado de la Predicción
                 </h3>
                 <div className="space-y-2 text-sm">
+                  {predictionResult.product_info && (
+                    <div className="pb-2 border-b border-green-300">
+                      <p>
+                        <strong>Producto:</strong>{" "}
+                        {predictionResult.product_info.item || "N/A"}
+                      </p>
+                      <p>
+                        <strong>Código:</strong>{" "}
+                        {predictionResult.product_info.codigo || "N/A"}
+                      </p>
+                      <p>
+                        <strong>Stock Actual:</strong>{" "}
+                        <span className="font-semibold">
+                          {predictionResult.product_info.current_stock.toFixed(
+                            2
+                          )}
+                        </span>
+                      </p>
+                    </div>
+                  )}
                   <p>
                     <strong>Fecha objetivo:</strong>{" "}
                     {new Date(predictionResult.target_date).toLocaleDateString(
@@ -508,6 +557,24 @@ export const Productos = () => {
                       {predictionResult.stock_estimado.toFixed(2)}
                     </span>
                   </p>
+                  {predictionResult.analysis && (
+                    <div className="mt-3 pt-3 border-t border-green-300">
+                      <p className="font-semibold text-green-800 mb-1">
+                        Análisis:
+                      </p>
+                      <p className="text-gray-700 whitespace-pre-line">
+                        {predictionResult.analysis}
+                      </p>
+                    </div>
+                  )}
+                  {!predictionResult.analysis && (
+                    <div className="mt-3 pt-3 border-t border-orange-300 bg-orange-50 p-2 rounded">
+                      <p className="text-orange-700 text-xs">
+                        ℹ️ Análisis del chat no disponible. Verifica que el
+                        servicio en puerto 1919 esté ejecutándose.
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -575,7 +642,10 @@ export const Productos = () => {
                     <div className="text-2xl font-bold text-blue-700">
                       {restockResult.products_analyzed_in_page}
                     </div>
-                    <div className="text-xs text-gray-600">Productos Analizados (Página {restockResult.page}/{restockResult.total_pages})</div>
+                    <div className="text-xs text-gray-600">
+                      Productos Analizados (Página {restockResult.page}/
+                      {restockResult.total_pages})
+                    </div>
                   </div>
                   <div className="text-center">
                     <div className="text-2xl font-bold text-gray-700">
@@ -587,50 +657,88 @@ export const Productos = () => {
                     <div className="text-2xl font-bold text-orange-700">
                       {restockResult.products_needing_restock}
                     </div>
-                    <div className="text-xs text-gray-600">Necesitan Restock (Esta Página)</div>
+                    <div className="text-xs text-gray-600">
+                      Necesitan Restock (Esta Página)
+                    </div>
                   </div>
                   <div className="text-center">
                     <div className="text-2xl font-bold text-green-700">
                       ${restockResult.total_restock_cost.toFixed(2)}
                     </div>
-                    <div className="text-xs text-gray-600">Inversión (Esta Página)</div>
+                    <div className="text-xs text-gray-600">
+                      Inversión (Esta Página)
+                    </div>
                   </div>
                 </div>
 
                 {restockResult.restock_list.length > 0 ? (
                   <div className="overflow-x-auto">
-                    <h3 className="font-semibold text-lg mb-2">Productos que Necesitan Restock</h3>
+                    <h3 className="font-semibold text-lg mb-2">
+                      Productos que Necesitan Restock
+                    </h3>
                     <table className="min-w-full bg-white border border-gray-200">
                       <thead className="bg-gray-100">
                         <tr>
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-700">Código</th>
-                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-700">Producto</th>
-                          <th className="px-4 py-2 text-right text-xs font-medium text-gray-700">Stock Actual</th>
-                          <th className="px-4 py-2 text-right text-xs font-medium text-gray-700">Stock Predicho</th>
-                          <th className="px-4 py-2 text-right text-xs font-medium text-gray-700">Umbral</th>
-                          <th className="px-4 py-2 text-right text-xs font-medium text-gray-700">Cantidad Restock</th>
-                          <th className="px-4 py-2 text-right text-xs font-medium text-gray-700">Costo Unit.</th>
-                          <th className="px-4 py-2 text-right text-xs font-medium text-gray-700">Costo Total</th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-700">
+                            Código
+                          </th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-700">
+                            Producto
+                          </th>
+                          <th className="px-4 py-2 text-right text-xs font-medium text-gray-700">
+                            Stock Actual
+                          </th>
+                          <th className="px-4 py-2 text-right text-xs font-medium text-gray-700">
+                            Stock Predicho
+                          </th>
+                          <th className="px-4 py-2 text-right text-xs font-medium text-gray-700">
+                            Umbral
+                          </th>
+                          <th className="px-4 py-2 text-right text-xs font-medium text-gray-700">
+                            Cantidad Restock
+                          </th>
+                          <th className="px-4 py-2 text-right text-xs font-medium text-gray-700">
+                            Costo Unit.
+                          </th>
+                          <th className="px-4 py-2 text-right text-xs font-medium text-gray-700">
+                            Costo Total
+                          </th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-200">
                         {restockResult.restock_list.map((item) => (
-                          <tr key={item.product_id} className="hover:bg-gray-50">
-                            <td className="px-4 py-2 text-sm">{item.codigo || '-'}</td>
-                            <td className="px-4 py-2 text-sm">{item.item || '-'}</td>
-                            <td className="px-4 py-2 text-sm text-right">{item.current_stock.toFixed(2)}</td>
+                          <tr
+                            key={item.product_id}
+                            className="hover:bg-gray-50"
+                          >
+                            <td className="px-4 py-2 text-sm">
+                              {item.codigo || "-"}
+                            </td>
+                            <td className="px-4 py-2 text-sm">
+                              {item.item || "-"}
+                            </td>
+                            <td className="px-4 py-2 text-sm text-right">
+                              {item.current_stock.toFixed(2)}
+                            </td>
                             <td className="px-4 py-2 text-sm text-right">
                               <span className="text-red-600 font-semibold">
                                 {item.predicted_stock.toFixed(2)}
                               </span>
                             </td>
-                            <td className="px-4 py-2 text-sm text-right">{item.safety_threshold.toFixed(2)}</td>
+                            <td className="px-4 py-2 text-sm text-right">
+                              {item.safety_threshold.toFixed(2)}
+                            </td>
                             <td className="px-4 py-2 text-sm text-right">
                               <span className="text-orange-600 font-semibold">
                                 {item.restock_amount.toFixed(2)}
                               </span>
                             </td>
-                            <td className="px-4 py-2 text-sm text-right">${item.unit_cost ? Number(item.unit_cost).toFixed(2) : '0.00'}</td>
+                            <td className="px-4 py-2 text-sm text-right">
+                              $
+                              {item.unit_cost
+                                ? Number(item.unit_cost).toFixed(2)
+                                : "0.00"}
+                            </td>
                             <td className="px-4 py-2 text-sm text-right">
                               <span className="text-green-700 font-semibold">
                                 ${item.total_cost.toFixed(2)}
@@ -643,7 +751,8 @@ export const Productos = () => {
                   </div>
                 ) : (
                   <div className="p-4 bg-green-50 text-green-700 rounded-md text-center">
-                    ✓ ¡Excelente! Ningún producto necesita restock según el análisis.
+                    ✓ ¡Excelente! Ningún producto necesita restock según el
+                    análisis.
                   </div>
                 )}
 
@@ -662,22 +771,34 @@ export const Productos = () => {
                         &lt;&lt;
                       </button>
                       <button
-                        onClick={() => handleRestockPageChange(restockResult.page - 1)}
+                        onClick={() =>
+                          handleRestockPageChange(restockResult.page - 1)
+                        }
                         disabled={restockResult.page === 1 || checkingRestock}
                         className="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
                       >
                         &lt; Anterior
                       </button>
                       <button
-                        onClick={() => handleRestockPageChange(restockResult.page + 1)}
-                        disabled={restockResult.page === restockResult.total_pages || checkingRestock}
+                        onClick={() =>
+                          handleRestockPageChange(restockResult.page + 1)
+                        }
+                        disabled={
+                          restockResult.page === restockResult.total_pages ||
+                          checkingRestock
+                        }
                         className="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
                       >
                         Siguiente &gt;
                       </button>
                       <button
-                        onClick={() => handleRestockPageChange(restockResult.total_pages)}
-                        disabled={restockResult.page === restockResult.total_pages || checkingRestock}
+                        onClick={() =>
+                          handleRestockPageChange(restockResult.total_pages)
+                        }
+                        disabled={
+                          restockResult.page === restockResult.total_pages ||
+                          checkingRestock
+                        }
                         className="px-3 py-1 bg-gray-200 text-gray-800 rounded hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm"
                       >
                         &gt;&gt;
