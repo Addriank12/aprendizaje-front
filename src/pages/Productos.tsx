@@ -3,9 +3,8 @@ import { useInventario } from "../hooks/useInventario";
 
 interface PredictionResult {
   productId: number;
-  stock_estimado: number;
+  stock_predicho: number;
   target_date: string;
-  days_ahead: number;
   product_info?: {
     id: number;
     codigo?: string;
@@ -41,6 +40,7 @@ interface RestockResponse {
   products_needing_restock: number;
   total_restock_cost: number;
   restock_list: RestockItem[];
+  analysis?: string | null;
 }
 
 export const Productos = () => {
@@ -122,9 +122,8 @@ export const Productos = () => {
       console.log("Analysis en resultado:", result.analysis);
       setPredictionResult({
         productId: result.product_id,
-        stock_estimado: result.stock_estimado,
+        stock_predicho: result.stock_predicho,
         target_date: result.target_date,
-        days_ahead: result.days_ahead,
         product_info: result.product_info,
         analysis: result.analysis,
       });
@@ -547,14 +546,10 @@ export const Productos = () => {
                       "es-ES"
                     )}
                   </p>
-                  <p>
-                    <strong>Días adelante:</strong>{" "}
-                    {predictionResult.days_ahead}
-                  </p>
                   <p className="text-lg">
-                    <strong>Stock estimado:</strong>{" "}
+                    <strong>Stock predicho:</strong>{" "}
                     <span className="text-green-700 font-bold">
-                      {predictionResult.stock_estimado.toFixed(2)}
+                      {predictionResult.stock_predicho.toFixed(2)}
                     </span>
                   </p>
                   {predictionResult.analysis && (
@@ -637,6 +632,24 @@ export const Productos = () => {
 
             {restockResult && (
               <div className="mb-4">
+                {restockResult.analysis && (
+                  <div className="mb-4 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg">
+                    <h3 className="font-semibold text-blue-900 mb-2 flex items-center">
+                      <span className="mr-2">📊</span> Análisis Profesional
+                    </h3>
+                    <p className="text-gray-700 text-sm whitespace-pre-line leading-relaxed">
+                      {restockResult.analysis}
+                    </p>
+                  </div>
+                )}
+                {!restockResult.analysis && (
+                  <div className="mb-4 p-3 bg-orange-50 border border-orange-200 rounded-lg">
+                    <p className="text-orange-700 text-xs">
+                      ℹ️ Análisis del chat no disponible. Verifica que el
+                      servicio en la API esté ejecutándose.
+                    </p>
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-4 mb-4 p-4 bg-blue-50 rounded-lg">
                   <div className="text-center">
                     <div className="text-2xl font-bold text-blue-700">

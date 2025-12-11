@@ -4,10 +4,8 @@ import type { Inventario } from "../data_acces/db/schema/inventario";
 const API_URL = "http://localhost:3000/api";
 
 interface StockPrediction {
-  days_ahead: number;
-  prediccion_salida: number;
   product_id: number;
-  stock_estimado: number;
+  stock_predicho: number;
   target_date: string;
   product_info?: {
     id: number;
@@ -64,6 +62,11 @@ interface RestockResponse {
   restock_list: RestockItem[];
 }
 
+interface ChatResponse {
+  pregunta: string;
+  respuesta: string;
+}
+
 interface UseInventarioResult {
   inventario: Inventario[];
   loading: boolean;
@@ -77,6 +80,8 @@ interface UseInventarioResult {
   retrainError: string | null;
   checkingRestock: boolean;
   restockError: string | null;
+  chatting: boolean;
+  chatError: string | null;
   nextPage: () => void;
   prevPage: () => void;
   goToPage: (page: number) => void;
@@ -94,6 +99,7 @@ interface UseInventarioResult {
     page?: number,
     limit?: number
   ) => Promise<RestockResponse | null>;
+  sendChatMessage: (pregunta: string) => Promise<ChatResponse | null>;
 }
 
 export const useInventario = (
@@ -111,6 +117,8 @@ export const useInventario = (
   const [retrainError, setRetrainError] = useState<string | null>(null);
   const [checkingRestock, setCheckingRestock] = useState<boolean>(false);
   const [restockError, setRestockError] = useState<string | null>(null);
+  const [chatting, setChatting] = useState<boolean>(false);
+  const [chatError, setChatError] = useState<string | null>(null);
 
   const totalPages = Math.ceil(totalCount / itemsPerPage);
 
@@ -317,6 +325,39 @@ export const useInventario = (
     }
   };
 
+  const sendChatMessage = async (
+    pregunta: string
+  ): Promise<ChatResponse | null> => {
+    setChatting(true);
+    setChatError(null);
+
+    try {
+      const response = await fetch(`${API_URL}/chat`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          pregunta,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Error al enviar mensaje al chat");
+      }
+
+      const result: ChatResponse = await response.json();
+      return result;
+    } catch (err) {
+      setChatError(
+        err instanceof Error ? err.message : "Error al comunicarse con el chat"
+      );
+      return null;
+    } finally {
+      setChatting(false);
+    }
+  };
+
   return {
     inventario,
     loading,
@@ -330,6 +371,8 @@ export const useInventario = (
     retrainError,
     checkingRestock,
     restockError,
+    chatting,
+    chatError,
     nextPage,
     prevPage,
     goToPage,
@@ -339,6 +382,7 @@ export const useInventario = (
     predictStock,
     retrainModel,
     checkRestock,
+    sendChatMessage,
   };
 };
 

@@ -130,14 +130,16 @@ app.post("/api/predict", async (req, res) => {
         day: "numeric",
         month: "long",
         year: "numeric",
-      })}? El stock estimado es ${prediction.stock_estimado.toFixed(
+      })}? El stock predecido es ${prediction.stock_predicho.toFixed(
         2
-      )} unidades (predicción de salida: ${
-        prediction.prediccion_salida
-      }, días adelante: ${
-        prediction.days_ahead
-      }). Si el stock estimado es bajo, dame una recomendación.`;
-
+      )}, fecha objetivo: ${
+        prediction.target_date
+      }). La fecha actual es: ${new Date().toLocaleDateString("es-ES", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      })}. En una respuesta máxima de entre 50 y 100 palabras`;
+      console.log(pregunta);
       const chatResponse = await fetch(
         "https://stock-retrain-service-18474533500.us-central1.run.app/api/v1/chat",
         {
@@ -154,10 +156,11 @@ app.post("/api/predict", async (req, res) => {
       if (chatResponse.ok) {
         const chatResult = await chatResponse.json();
         analysis =
+          chatResult.respuesta_ia ||
           chatResult.respuesta ||
           chatResult.analysis ||
           chatResult.message ||
-          chatResult;
+          (typeof chatResult === "string" ? chatResult : null);
         console.log("Respuesta del chat recibida:", analysis);
       } else {
         console.warn(`Chat API respondió con status ${chatResponse.status}`);
@@ -350,6 +353,7 @@ app.post("/api/check-restock", async (req, res) => {
     ]);
 
     // Preparar predicciones para todos los productos
+    const allPredictions = [];
     const restockNeeded = [];
 
     for (const product of products) {
@@ -371,27 +375,29 @@ app.post("/api/check-restock", async (req, res) => {
         if (response.ok) {
           const prediction = await response.json();
           const currentStock = product.cantidad || 0;
-          const predictedStock = prediction.stock_estimado || 0;
+          const predictedStock = prediction.stock_predicho || 0;
+          const restockAmount = Math.max(0, safetyThreshold - predictedStock);
+
+          const productData = {
+            product_id: product.Id,
+            codigo: product.codigo,
+            item: product.item,
+            current_stock: currentStock,
+            predicted_stock: predictedStock,
+            safety_threshold: safetyThreshold,
+            restock_amount: Math.ceil(restockAmount),
+            predicted_shortage: predictedStock < 0,
+            unit_cost: product.pre1,
+            total_cost:
+              Math.ceil(restockAmount) * parseFloat(product.pre1 || "0"),
+            target_date: prediction.target_date,
+          };
+
+          allPredictions.push(productData);
 
           // Si el stock predicho está por debajo del umbral, necesita restock
           if (predictedStock < safetyThreshold) {
-            const restockAmount = Math.max(0, safetyThreshold - predictedStock);
-
-            restockNeeded.push({
-              product_id: product.Id,
-              codigo: product.codigo,
-              item: product.item,
-              current_stock: currentStock,
-              predicted_stock: predictedStock,
-              safety_threshold: safetyThreshold,
-              restock_amount: Math.ceil(restockAmount),
-              predicted_shortage: predictedStock < 0,
-              unit_cost: product.pre1,
-              total_cost:
-                Math.ceil(restockAmount) * parseFloat(product.pre1 || "0"),
-              days_ahead: prediction.days_ahead,
-              target_date: prediction.target_date,
-            });
+            restockNeeded.push(productData);
           }
         }
       } catch (err) {
@@ -401,9 +407,90 @@ app.post("/api/check-restock", async (req, res) => {
     }
 
     // Ordenar por cantidad de restock necesaria (descendente)
-    restockNeeded.sort((a, b) => b.restock_amount - a.restock_amount);
+    allPredictions.sort((a, b) => b.restock_amount - a.restock_amount);
 
     const totalPages = Math.ceil(totalProducts / itemsPerPage);
+    const totalRestockCost = restockNeeded.reduce(
+      (sum, p) => sum + p.total_cost,
+      0
+    );
+
+    // Obtener análisis del chat sobre el restock
+    let analysis = null;
+    try {
+      const pregunta = `Actúa como experto en gestión de inventarios. Analiza el siguiente reporte de restock:
+
+- Fecha de análisis: ${new Date(date).toLocaleDateString("es-ES", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      })}
+- Total de productos analizados en esta página: ${allPredictions.length}
+- Productos que necesitan restock: ${restockNeeded.length}
+- Inversión total requerida para restock: $${totalRestockCost.toFixed(2)}
+- Umbral de seguridad establecido: ${safetyThreshold} unidades
+
+${
+  allPredictions.length > 0
+    ? `Top 5 productos con mayor necesidad de restock:
+${allPredictions
+  .slice(0, 5)
+  .map(
+    (p, i) =>
+      `${i + 1}. ${p.item || "Sin nombre"} (Código: ${
+        p.codigo || "N/A"
+      }) - Stock predicho: ${p.predicted_stock.toFixed(2)}, ${
+        p.predicted_stock < safetyThreshold
+          ? `Necesita ${
+              p.restock_amount
+            } unidades (Inversión: $${p.total_cost.toFixed(2)})`
+          : "Stock suficiente"
+      }`
+  )
+  .join("\n")}`
+    : "No hay productos analizados en esta página."
+}
+
+Proporciona un análisis breve y profesional (máximo 100-150 palabras) con:
+1. Evaluación general de la situación del inventario
+2. Recomendaciones prioritarias
+3. Alertas o consideraciones importantes`;
+
+      console.log("Solicitando análisis de restock al chat...");
+      const chatResponse = await fetch(
+        "https://stock-retrain-service-18474533500.us-central1.run.app/api/v1/chat",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            pregunta,
+          }),
+        }
+      );
+
+      if (chatResponse.ok) {
+        const chatResult = await chatResponse.json();
+        analysis =
+          chatResult.respuesta_ia ||
+          chatResult.respuesta ||
+          chatResult.analysis ||
+          chatResult.message ||
+          (typeof chatResult === "string" ? chatResult : null);
+        console.log("Análisis de restock recibido:", analysis);
+      } else {
+        console.warn(
+          `Chat API respondió con status ${chatResponse.status} para análisis de restock`
+        );
+      }
+    } catch (chatError) {
+      console.error(
+        "Error al obtener análisis de restock del chat:",
+        chatError
+      );
+      // No fallar si el chat no está disponible
+    }
 
     res.json({
       date,
@@ -412,18 +499,69 @@ app.post("/api/check-restock", async (req, res) => {
       limit: itemsPerPage,
       total_pages: totalPages,
       total_products_in_db: totalProducts,
-      products_analyzed_in_page: products.length,
+      products_analyzed_in_page: allPredictions.length,
       products_needing_restock: restockNeeded.length,
-      total_restock_cost: restockNeeded.reduce(
-        (sum, p) => sum + p.total_cost,
-        0
-      ),
-      restock_list: restockNeeded,
+      total_restock_cost: totalRestockCost,
+      restock_list: allPredictions,
+      analysis,
     });
   } catch (error) {
     console.error("Error al verificar restock:", error);
     res.status(500).json({
       error: "Error al verificar necesidad de restock",
+      message: error instanceof Error ? error.message : "Error desconocido",
+    });
+  }
+});
+
+// Chat general con el sistema
+app.post("/api/chat", async (req, res) => {
+  try {
+    const { pregunta } = req.body;
+
+    if (!pregunta) {
+      return res.status(400).json({
+        error: "Parámetros faltantes",
+        message: "Se requiere 'pregunta'",
+      });
+    }
+
+    // Enviar pregunta al chat
+    const chatResponse = await fetch(
+      "https://stock-retrain-service-18474533500.us-central1.run.app/api/v1/chat",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          pregunta,
+        }),
+      }
+    );
+
+    if (!chatResponse.ok) {
+      throw new Error(
+        `Error en la API de chat: ${chatResponse.status} ${chatResponse.statusText}`
+      );
+    }
+
+    const chatResult = await chatResponse.json();
+    const respuesta =
+      chatResult.respuesta_ia ||
+      chatResult.respuesta ||
+      chatResult.analysis ||
+      chatResult.message ||
+      (typeof chatResult === "string" ? chatResult : "No se obtuvo respuesta");
+
+    res.json({
+      pregunta,
+      respuesta,
+    });
+  } catch (error) {
+    console.error("Error en chat:", error);
+    res.status(500).json({
+      error: "Error al comunicarse con el chat",
       message: error instanceof Error ? error.message : "Error desconocido",
     });
   }
